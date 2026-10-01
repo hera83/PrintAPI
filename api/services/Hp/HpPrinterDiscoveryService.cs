@@ -18,11 +18,13 @@ public class HpPrinterDiscoveryService(
     ILogger<HpPrinterDiscoveryService> logger) : IHpPrinterDiscoveryService
 {
     private const int DefaultIppPort = 631;
-    private const int MinScanPrefixLength = 22; // never scan more than ~1000 hosts per interface
+    private const int MinScanPrefixLength = 16; // never scan more than ~65,000 hosts per interface (a /16 takes ~2 min)
     private const int MaxParallelPrinterQueries = 16;
-    private const int MaxParallelPortProbes = 128;
+    private const int MaxParallelPortProbes = 256;
 
     private static readonly string[] PrinterServiceTypes = ["_ipp._tcp.local", "_ipps._tcp.local", "_pdl-datastream._tcp.local", "_printer._tcp.local"];
+    // Virtual bridges created by Docker/libvirt on the host (visible with network_mode: host); they never contain printers.
+    private static readonly string[] SkippedInterfacePrefixes = ["docker", "br-", "veth", "virbr"];
     private static readonly string[] FallbackResourcePaths = ["ipp/print", "ipp", ""];
     private static readonly TimeSpan PrinterQueryTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan PortProbeTimeout = TimeSpan.FromMilliseconds(500);
@@ -220,7 +222,8 @@ public class HpPrinterDiscoveryService(
         foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
         {
             if (networkInterface.OperationalStatus != OperationalStatus.Up
-                || networkInterface.NetworkInterfaceType == NetworkInterfaceType.Loopback)
+                || networkInterface.NetworkInterfaceType == NetworkInterfaceType.Loopback
+                || SkippedInterfacePrefixes.Any(p => networkInterface.Name.StartsWith(p, StringComparison.OrdinalIgnoreCase)))
             {
                 continue;
             }
@@ -244,6 +247,11 @@ public class HpPrinterDiscoveryService(
                 var mask = uint.MaxValue << (32 - unicastAddress.PrefixLength);
                 var network = self & mask;
                 var broadcast = network | ~mask;
+                var hostCount = broadcast > network ? broadcast - network - 1 : 0;
+
+                logger.LogInformation(
+                    "Scanning {Address}/{PrefixLength} on {Interface} ({HostCount} host(s)) for IPP port {Port}",
+                    unicastAddress.Address, unicastAddress.PrefixLength, networkInterface.Name, hostCount, DefaultIppPort);
 
                 for (var host = network + 1; host < broadcast; host++)
                 {
