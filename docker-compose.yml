@@ -1,0 +1,22 @@
+services:
+  printapi:
+    build: .
+    image: printapi:latest
+    container_name: printapi
+    restart: unless-stopped
+    environment:
+      ApiKeys__MasterKey: ${MASTER_KEY:?Set MASTER_KEY in .env (see .env.example)}
+    ports:
+      - "8080:8080"
+    # Printing to a registered printer works on the default bridge network. Discovering printers via
+    # mDNS (GET /Hp/Discover) and the subnet scan need the host's network instead. On a Linux host,
+    # remove `ports:` above and uncomment the line below. The API then listens on port 8080 of the
+    # host directly.
+    # network_mode: host
+    volumes:
+      - printapi-dbs:/app/app_dbs
+      - printapi-files:/app/app_files
+
+volumes:
+  printapi-dbs:
+  printapi-files:

@@ -1,0 +1,23 @@
+# Build output
+**/bin/
+**/obj/
+
+# Local data: databases and stored print documents belong on the container's volumes, not in the image
+**/app_dbs/
+**/app_files/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# Secrets
+**/appsettings.Development.json
+.env
+
+# Editor / tooling
+**/*.user
+.vs/
+.vscode/
+.idea/
+.claude/
+.git/
+.github/
