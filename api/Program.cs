@@ -51,6 +51,8 @@ builder.Host.UseSerilog((_, loggerConfiguration) =>
     loggerConfiguration
         .MinimumLevel.Information()
         .MinimumLevel.Override("Microsoft.AspNetCore", LogEventLevel.Warning)
+        // EF Core logs every SQL command at Information; the print queue polls every 5 s, which would bury everything else.
+        .MinimumLevel.Override("Microsoft.EntityFrameworkCore", LogEventLevel.Warning)
         .Enrich.FromLogContext()
         .WriteTo.Console()
         .WriteTo.SQLite(

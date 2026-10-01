@@ -87,18 +87,19 @@ The container keeps its data in two named Docker volumes, so it survives restart
 
 The database is created and migrated automatically when the container starts.
 
-### Network: finding printers automatically
+### Network
 
-By default the container runs on Docker's bridge network. **Printing to a registered printer works
-fine there**, but printer discovery (`POST /Hp/StartDiscover`) can't see the local network from
-inside the container, so it won't find anything. You can do either of the following:
+The container uses the host's network (`network_mode: host`), so printer discovery
+(`POST /Hp/StartDiscover`) searches the same network as the server itself, and the API listens
+directly on port 8080 of the host. Port 8080 must therefore be free on the host.
 
-- **Register printers by IP address** (recommended for Docker Desktop on Windows/macOS): use
-  `POST /Hp/Register` with the printer's IP. Give the printer a fixed IP or a DHCP reservation in
-  your router.
-- **Use the host's network** (Linux hosts): in `docker-compose.yml`, remove the `ports:` section and
-  uncomment `network_mode: host`. Discovery then works, and the API listens directly on port 8080
-  of the host.
+Host networking requires a **Linux host**. On Docker Desktop (Windows/macOS) it only works if
+host networking is enabled in Docker Desktop's settings. If it isn't available, remove
+`network_mode: host` from `docker-compose.yml` and add `ports: ["8080:8080"]` instead. Printing
+still works then, but discovery won't find anything, so register printers by IP address with
+`POST /Hp/Register`.
+
+Either way, give your printers a fixed IP or a DHCP reservation in your router.
 
 ### Update
 
@@ -120,7 +121,7 @@ docker compose down               # stop (the volumes and data are kept)
 Every request needs an `x-api-key` header. The examples below use `curl`; everything can also be
 done from Swagger UI.
 
-**1. Find printers** (requires host networking, see above). The search runs in the background on the
+**1. Find printers** (requires host networking, see Network above). The search runs in the background on the
 server. Start it:
 
 ```bash
