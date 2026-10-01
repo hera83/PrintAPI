@@ -90,8 +90,8 @@ The database is created and migrated automatically when the container starts.
 ### Network: finding printers automatically
 
 By default the container runs on Docker's bridge network. **Printing to a registered printer works
-fine there**, but `GET /Hp/Discover` can't see the local network's mDNS traffic, so it won't find
-anything. You can do either of the following:
+fine there**, but printer discovery (`POST /Hp/StartDiscover`) can't see the local network from
+inside the container, so it won't find anything. You can do either of the following:
 
 - **Register printers by IP address** (recommended for Docker Desktop on Windows/macOS): use
   `POST /Hp/Register` with the printer's IP. Give the printer a fixed IP or a DHCP reservation in
@@ -120,21 +120,53 @@ docker compose down               # stop (the volumes and data are kept)
 Every request needs an `x-api-key` header. The examples below use `curl`; everything can also be
 done from Swagger UI.
 
-**1. Find printers** (requires host networking, see above):
+**1. Find printers** (requires host networking, see above). The search runs in the background on the
+server. Start it:
 
 ```bash
-curl -H "x-api-key: $MASTER_KEY" "http://localhost:8080/Hp/Discover?timeoutSeconds=5"
+curl -X POST http://localhost:8080/Hp/StartDiscover \
+  -H "x-api-key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{ "scanSubnet": true }'
 ```
 
-**2. Register a printer** by IP or hostname:
+The response includes the search's `id`. Then ask for the result, repeating until `isFinished` is
+`true`:
+
+```bash
+curl -H "x-api-key: $MASTER_KEY" http://localhost:8080/Hp/GetDiscover/<id>
+```
+
+Without `scanSubnet`, the API only asks the network via mDNS/Bonjour, which takes a few seconds but
+only reaches printers on the same network segment. With `scanSubnet: true`, it also tries port 631
+on every address in the server's own subnet (up to a /16, about 65,000 addresses). This takes about
+2 minutes; `hostsProbed` / `hostsToProbe` in the response show how far it has come. The results are
+kept for an hour.
+
+If you already know the printer's IP address (e.g. from the printer's own display or network
+configuration page), you can skip the search and register it directly.
+
+**2. Register a printer** by IP or hostname. That's all the API needs; it reads everything else
+(name, model, serial number, color/duplex support, ink levels, ...) from the printer itself:
 
 ```bash
 curl -X POST http://localhost:8080/Hp/Register \
   -H "x-api-key: $MASTER_KEY" -H "Content-Type: application/json" \
-  -d '{ "host": "192.168.1.50", "name": "Office printer" }'
+  -d '{ "host": "192.168.1.50" }'
 ```
 
-The response includes the printer's `id`.
+`name` (defaults to the printer's own name) and `note` are optional. The response includes the
+printer's `id`.
+
+If the printer later gets a new IP address, send just the new address. The API reads the printer
+at the new address and checks that it's the same printer:
+
+```bash
+curl -X PUT http://localhost:8080/Hp/Update/1 \
+  -H "x-api-key: $MASTER_KEY" -H "Content-Type: application/json" \
+  -d '{ "host": "192.168.1.60" }'
+```
+
+`Update` only changes the fields you send (`name`, `note`, `isActive`, `host`).
 
 **3. Print a test page**:
 
@@ -186,8 +218,12 @@ curl -H "x-api-key: ak_..." http://localhost:8080/Print/GetStatus/<job-id>
 | `GET /Print/GetStatus/{id}`           | Any key    | Status of a print job                                     |
 | `GET /Print/GetAll`                   | Any key    | List print jobs (standard keys only see their own)        |
 | `POST /Print/Cancel/{id}`             | Any key    | Cancel a print job                                        |
-| `GET /Hp/Discover`, `GET /Hp/Inspect` | Master key | Find or inspect printers on the network                   |
-| `/Hp/...`                             | Master key | Register, update, refresh, delete printers; test page     |
+| `POST /Hp/StartDiscover`              | Master key | Start a background search for printers on the network     |
+| `GET /Hp/GetDiscover/{id}`            | Master key | Progress and results of a search                          |
+| `POST /Hp/Register`                   | Master key | Register a printer by IP or hostname                      |
+| `PUT /Hp/Update/{id}`                 | Master key | Change name, note, active state or IP address             |
+| `POST /Hp/Refresh/{id}`               | Master key | Read the printer again (state, ink levels, firmware, ...) |
+| `/Hp/...`                             | Master key | List, get, delete printers; print a test page             |
 | `/Keys/...`                           | Master key | Create, update, roll over and delete API keys             |
 | `GET /Log`                            | Master key | Search the application log                                |
 

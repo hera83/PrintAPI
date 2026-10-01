@@ -2,18 +2,13 @@ using System.ComponentModel.DataAnnotations;
 
 namespace api.Dtos.Hp;
 
+/// <summary>Only <see cref="Host"/> is required; everything else about the printer is read from the printer itself.</summary>
 public class RegisterHpPrinterRequestDto
 {
-    /// <summary>IP address or hostname of the printer (use the <c>host</c> from a Discover result).</summary>
+    /// <summary>IP address or hostname of the printer, e.g. <c>10.64.2.134</c>.</summary>
     [Required]
     [StringLength(255)]
     public string Host { get; set; } = string.Empty;
-
-    [Range(1, 65535)]
-    public int Port { get; set; } = 631;
-
-    [StringLength(200)]
-    public string ResourcePath { get; set; } = "ipp/print";
 
     /// <summary>Display name; defaults to the printer's own name.</summary>
     [StringLength(200)]

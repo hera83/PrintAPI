@@ -128,6 +128,8 @@ builder.Services.AddScoped<IMdnsBrowser, MdnsBrowser>();
 // IppClient applies its own per-operation timeouts (a print job may take far longer than an attribute query).
 builder.Services.AddHttpClient<IIppClient, IppClient>(client => client.Timeout = Timeout.InfiniteTimeSpan);
 builder.Services.AddScoped<IHpPrinterDiscoveryService, HpPrinterDiscoveryService>();
+builder.Services.AddSingleton<HpDiscoveryJobStore>();
+builder.Services.AddHostedService<HpDiscoveryWorker>();
 builder.Services.AddScoped<IHpPrintService, HpPrintService>();
 
 builder.Services.AddSingleton(new PrintJobFileStore(Path.Combine(builder.Environment.ContentRootPath, "app_files", "PrintJobs")));

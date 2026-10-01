@@ -261,11 +261,11 @@ public class IppClient(HttpClient httpClient) : IIppClient
         }
         catch (HttpRequestException ex)
         {
-            throw new IppException(HttpStatusCode.BadGateway, $"Could not reach printer at {httpUri}: {ex.Message}");
+            throw new IppException(HttpStatusCode.BadGateway, $"Could not reach printer at {httpUri}: {ex.Message}", isUnreachable: true);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
-            throw new IppException(HttpStatusCode.GatewayTimeout, $"Timed out waiting for printer at {httpUri}.");
+            throw new IppException(HttpStatusCode.GatewayTimeout, $"Timed out waiting for printer at {httpUri}.", isUnreachable: true);
         }
 
         var ippResponse = ParseResponse(responseBody, httpUri);

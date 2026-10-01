@@ -9,11 +9,15 @@ public class IppException : Exception
     /// <summary>The IPP status code when the printer answered with an IPP error; null for network/HTTP/timeout failures.</summary>
     public ushort? IppStatusCode { get; }
 
-    public IppException(HttpStatusCode statusCode, string message, ushort? ippStatusCode = null)
+    /// <summary>True when the printer never answered (connection failed or timed out), as opposed to answering with an error.</summary>
+    public bool IsUnreachable { get; }
+
+    public IppException(HttpStatusCode statusCode, string message, ushort? ippStatusCode = null, bool isUnreachable = false)
         : base(message)
     {
         StatusCode = statusCode;
         IppStatusCode = ippStatusCode;
+        IsUnreachable = isUnreachable;
     }
 
     /// <summary>

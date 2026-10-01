@@ -32,15 +32,18 @@ public class HpPrinterDiscoveryService(
 
     public async Task<IReadOnlyList<DiscoveredHpPrinterDto>> DiscoverAsync(
         HpDiscoveryRequestDto request,
+        HpDiscoveryProgress? progress = null,
         CancellationToken cancellationToken = default)
     {
+        progress?.SetPhase(HpDiscoveryProgress.PhaseMdns);
         var instances = await mdnsBrowser.BrowseAsync(PrinterServiceTypes, TimeSpan.FromSeconds(request.TimeoutSeconds), cancellationToken);
         var candidates = GroupByDevice(instances);
 
         if (request.ScanSubnet)
         {
+            progress?.SetPhase(HpDiscoveryProgress.PhaseSubnetScan);
             var knownHosts = candidates.Select(c => c.Host).ToHashSet();
-            foreach (var address in await ScanLocalSubnetsAsync(cancellationToken))
+            foreach (var address in await ScanLocalSubnetsAsync(progress, cancellationToken))
             {
                 var host = address.ToString();
                 if (knownHosts.Add(host))
@@ -50,16 +53,25 @@ public class HpPrinterDiscoveryService(
             }
         }
 
+        progress?.SetPhase(HpDiscoveryProgress.PhaseInspecting);
+        progress?.SetDevicesToInspect(candidates.Count);
+
         var results = new ConcurrentBag<DiscoveredHpPrinterDto>();
         await Parallel.ForEachAsync(
             candidates,
             new ParallelOptions { MaxDegreeOfParallelism = MaxParallelPrinterQueries, CancellationToken = cancellationToken },
-            async (candidate, token) => results.Add(await InspectCandidateAsync(candidate, token)));
+            async (candidate, token) =>
+            {
+                results.Add(await InspectCandidateAsync(candidate, token));
+                progress?.DeviceInspected();
+            });
 
         logger.LogInformation("Printer discovery found {Total} device(s), {HpCount} HP", results.Count, results.Count(r => r.IsHp));
 
         return results
-            .Where(r => request.IncludeNonHp || r.IsHp)
+            // A device that didn't answer the IPP query can't be identified as HP, but it may well be the printer
+            // (e.g. one that's slow to wake up), so it's included with its InspectionError rather than hidden.
+            .Where(r => request.IncludeNonHp || r.IsHp || r.InspectionError is not null)
             .OrderBy(r => r.PrinterName, StringComparer.OrdinalIgnoreCase)
             .ThenBy(r => r.Host)
             .ToList();
@@ -67,17 +79,37 @@ public class HpPrinterDiscoveryService(
 
     public async Task<HpPrinterInfoDto> InspectAsync(
         string host,
-        int port,
-        string resourcePath,
+        string? preferredResourcePath = null,
         CancellationToken cancellationToken = default)
     {
         host = host.Trim();
         var addresses = await ResolveAsync(host, cancellationToken);
         var mdnsTask = FindMdnsCandidateAsync(host, addresses, cancellationToken);
 
-        var attributes = await ippClient.GetPrinterAttributesAsync(
-            HpPrinterInfoBuilder.BuildPrinterUri(host, port, resourcePath),
-            cancellationToken);
+        const int port = DefaultIppPort;
+        var resourcePaths = (preferredResourcePath is null ? FallbackResourcePaths : FallbackResourcePaths.Prepend(preferredResourcePath))
+            .Select(HpPrinterInfoBuilder.NormalizeResourcePath)
+            .Distinct()
+            .ToList();
+
+        Dictionary<string, List<string>> attributes;
+        string resourcePath;
+        try
+        {
+            (attributes, resourcePath) = await QueryAttributesAsync(host, port, resourcePaths, cancellationToken);
+        }
+        catch (IppException ex) when (!ex.IsUnreachable)
+        {
+            // None of the usual paths worked; the printer may advertise its own via mDNS (TXT "rp").
+            var advertised = (await mdnsTask)?.ResourcePath is { } rp ? HpPrinterInfoBuilder.NormalizeResourcePath(rp) : null;
+            if (advertised is null || resourcePaths.Contains(advertised))
+            {
+                throw;
+            }
+
+            (attributes, resourcePath) = await QueryAttributesAsync(host, port, [advertised], cancellationToken);
+        }
+
         var mdns = await mdnsTask;
 
         var info = new HpPrinterInfoDto();
@@ -93,6 +125,36 @@ public class HpPrinterDiscoveryService(
             mdns?.MdnsHostName,
             mdns?.DisplayName);
         return info;
+    }
+
+    /// <summary>
+    /// Tries each resource path until the printer answers Get-Printer-Attributes. Stops at once if the printer can't be
+    /// reached at all, since another path won't help; otherwise rethrows the last path's error.
+    /// </summary>
+    private async Task<(Dictionary<string, List<string>> Attributes, string ResourcePath)> QueryAttributesAsync(
+        string host,
+        int port,
+        IReadOnlyList<string> resourcePaths,
+        CancellationToken cancellationToken)
+    {
+        IppException? lastError = null;
+        foreach (var path in resourcePaths.Select(HpPrinterInfoBuilder.NormalizeResourcePath).Distinct())
+        {
+            try
+            {
+                var attributes = await ippClient.GetPrinterAttributesAsync(
+                    HpPrinterInfoBuilder.BuildPrinterUri(host, port, path),
+                    cancellationToken);
+                return (attributes, path);
+            }
+            catch (IppException ex) when (!ex.IsUnreachable)
+            {
+                logger.LogDebug("IPP query of {Host} at path '{Path}' failed: {Error}", host, path, ex.Message);
+                lastError = ex;
+            }
+        }
+
+        throw lastError!;
     }
 
     private async Task<DiscoveredHpPrinterDto> InspectCandidateAsync(Candidate candidate, CancellationToken cancellationToken)
@@ -215,7 +277,7 @@ public class HpPrinterDiscoveryService(
         }
     }
 
-    private async Task<IReadOnlyList<IPAddress>> ScanLocalSubnetsAsync(CancellationToken cancellationToken)
+    private async Task<IReadOnlyList<IPAddress>> ScanLocalSubnetsAsync(HpDiscoveryProgress? progress, CancellationToken cancellationToken)
     {
         var hosts = new HashSet<IPAddress>();
 
@@ -265,6 +327,8 @@ public class HpPrinterDiscoveryService(
             }
         }
 
+        progress?.AddHostsToProbe(hosts.Count);
+
         var found = new ConcurrentBag<IPAddress>();
         await Parallel.ForEachAsync(
             hosts,
@@ -285,6 +349,10 @@ public class HpPrinterDiscoveryService(
                 }
                 catch (SocketException)
                 {
+                }
+                finally
+                {
+                    progress?.HostProbed();
                 }
             });
 
